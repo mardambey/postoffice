@@ -54,7 +54,7 @@ public class App
     		System.out.println("Message could not be saved!");
     	}
     	
-    	c = ConversationUtil.getConversation("1501571:1");
+    	c = ConversationUtil.get("1501571:1");
     	    	
     	System.out.println("Conversation: " + c.getId());
     	for (Message msg : c.getMessages())
@@ -211,7 +211,10 @@ class ConversationUtil
 		{
         	Mutator mutator = Pelops.createMutator(pool);        		        		       
         	mutator.writeColumn(colFamily, conv.getId(), mutator.newColumn(msg.getId(), MessageUtil.toJson(msg)));        		        	
-        	mutator.execute(ConsistencyLevel.ONE);		        		
+        	mutator.execute(ConsistencyLevel.ONE);		  
+        	
+        	// TODO: must update folder sort order
+        	
         	return true;
 		}
 		catch (Exception e)
@@ -220,7 +223,7 @@ class ConversationUtil
 		}
 	}
 	
-	public static Conversation getConversation(String strId)
+	public static Conversation get(String strId)
 	{
 		Conversation c;
 		
@@ -239,5 +242,5 @@ class ConversationUtil
     	c.setMessages(setMessages);
     	    	
 		return c;
-	}
+	}		
 }
