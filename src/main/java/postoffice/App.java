@@ -45,16 +45,17 @@ public class App
     {    
     	PelopsUtil.connect();
     	
+    	Folder inbox = new Folder("1501571", "inbox");
     	Conversation c = new Conversation();
     	c.setId("1501571:2");
     	
     	Message m = new Message();
     	m.setId(System.currentTimeMillis() + "");
     	m.setSender("1501572");
-    	m.setSubject("Welcome to Postoffice! - " + new Date());
+    	m.setSubject("(-)(-)(-)(-)(-) Welcome to Postoffice! - " + new Date());
     	m.setBody("Postoffice is a simple messaging system using Cassandra!");
     	
-    	if (ConversationUtil.addMessage(c, m))
+    	if (ConversationUtil.addMessage(inbox, c, m))
     	{
     		System.out.println("Saved conversation!");
     	}
@@ -63,17 +64,16 @@ public class App
     		System.out.println("Message could not be saved!");
     	}
     	
-    	c = ConversationUtil.get("1501571:2");
+//    	c = ConversationUtil.get("1501571:1");
+//    	    	
+//    	System.out.println("== Conversation: " + c.getId());
+//    	for (Message msg : c.getMessages())
+//    	{
+//    		System.out.println("    -- Sender: " + msg.getSender());
+//    		System.out.println("    -- Subject: " + msg.getSubject());
+//    		System.out.println("    -- Body: " + msg.getBody());
+//    	}
     	    	
-    	System.out.println("== Conversation: " + c.getId());
-    	for (Message msg : c.getMessages())
-    	{
-    		System.out.println("    -- Sender: " + msg.getSender());
-    		System.out.println("    -- Subject: " + msg.getSubject());
-    		System.out.println("    -- Body: " + msg.getBody());
-    	}
-    	
-    	Folder inbox = new Folder("1501571", "inbox");
     	FolderUtil.addConversation(inbox, c);
     	
     	Set<Conversation> convs = FolderUtil.getConversations(inbox, 0L, 10);
@@ -82,13 +82,13 @@ public class App
     	
     	for (Conversation conv : convs)
     	{
-        	System.out.println("== Conversation: " + conv.getId());
-        	for (Message msg : conv.getMessages())
-        	{
-        		System.out.println("    -- Sender: " + msg.getSender());
-        		System.out.println("    -- Subject: " + msg.getSubject());
-        		System.out.println("    -- Body: " + msg.getBody());
-        	}
+        	System.out.println("== Conversation: " + conv.getId() + " - last msg received on " + conv.getLastReceivedDate());
+//        	for (Message msg : conv.getMessages())
+//        	{
+//        		System.out.println("    -- Sender: " + msg.getSender());
+//        		System.out.println("    -- Subject: " + msg.getSubject());
+//        		System.out.println("    -- Body: " + msg.getBody());
+//        	}
     	}
     	
     	PelopsUtil.disconnect();
@@ -105,7 +105,22 @@ class Conversation implements Comparable<Conversation>
 {
 	protected String m_strId;
 	protected TreeSet<Message> m_setMessages;
+	protected Long m_lLastReceivedDate;
 	
+	/**
+	 * @return the lastReceivedDate
+	 */
+	public Long getLastReceivedDate()
+	{
+		return m_lLastReceivedDate;
+	}
+	/**
+	 * @param lastReceivedDate the lastReceivedDate to set
+	 */
+	public void setLastReceivedDate(Long lastReceivedDate)
+	{
+		m_lLastReceivedDate = lastReceivedDate;
+	}
 	/**
 	 * @return the m_strId
 	 */
@@ -138,7 +153,7 @@ class Conversation implements Comparable<Conversation>
 	@Override
 	public int compareTo(Conversation c)
 	{
-		return c.getId().compareTo(m_strId);
+		return c.getLastReceivedDate().compareTo(m_lLastReceivedDate);
 	}
 }
 
@@ -161,7 +176,7 @@ class Message implements Comparable<Message>
 	 */
 	public void setId(String id)
 	{
-		this.m_strId = id;
+		m_strId = id;
 	}		
 	
 	/**
@@ -176,7 +191,7 @@ class Message implements Comparable<Message>
 	 */
 	public void setSubject(String subject)
 	{
-		this.m_strSubject = subject;
+		m_strSubject = subject;
 	}
 	/**
 	 * @return the body
@@ -190,7 +205,7 @@ class Message implements Comparable<Message>
 	 */
 	public void setBody(String body)
 	{
-		this.m_strBody = body;
+		m_strBody = body;
 	}
 	/**
 	 * @return the sender
@@ -204,7 +219,7 @@ class Message implements Comparable<Message>
 	 */
 	public void setSender(String sender)
 	{
-		this.m_strSender = sender;
+		m_strSender = sender;
 	}
 	
 	@Override
@@ -237,7 +252,7 @@ class Folder
 	 */
 	public void setName(String name)
 	{
-		this.m_strName = name;
+		m_strName = name;
 	}
 	/**
 	 * @return the owner
@@ -251,25 +266,22 @@ class Folder
 	 */
 	public void setOwner(String owner)
 	{
-		this.m_strOwner = owner;
+		m_strOwner = owner;
 	}		
 }
 
 class FolderUtil
 {
+	public static final String FOLDERS = "folders";
 	protected static String pool = "pool";
-	protected static String colFamily = "folders";
 	
 	public static boolean addConversation(Folder f, Conversation c)
 	{
 		try
 		{
-        	Mutator mutator = Pelops.createMutator(pool);        		        		       
-        	mutator.writeColumn(colFamily, getId(f), mutator.newColumn(c.getId(), ""));        		        	
-        	mutator.execute(ConsistencyLevel.ONE);		  
-        	
-        	// TODO: must update folder sort order
-        	
+        	Mutator mutator = Pelops.createMutator(pool);
+        	_addConvToFolder(mutator, f, c);        	        		        
+        	mutator.execute(ConsistencyLevel.ONE);
         	return true;
 		}
 		catch (Exception e)
@@ -284,9 +296,7 @@ class FolderUtil
 	}
 	
 	public static Set<Conversation> getConversations(Folder f, Long lStart, Integer iCount)
-	{
-		Conversation c;
-		
+	{		
     	Selector selector = Pelops.createSelector(pool);
     	SlicePredicate pred = new SlicePredicate();
     	SliceRange sliceRange = new SliceRange();
@@ -296,7 +306,7 @@ class FolderUtil
     	
     	pred.setSlice_range(sliceRange);
     	
-    	List<Column> listConvs = selector.getColumnsFromRow(colFamily, getId(f), pred, ConsistencyLevel.ONE);
+    	List<Column> listConvs = selector.getColumnsFromRow(FOLDERS, getId(f), pred, ConsistencyLevel.ONE);
     	List<Bytes> listConvIds = new ArrayList<Bytes>();
     	
     	for (Column col: listConvs)
@@ -304,20 +314,24 @@ class FolderUtil
     		listConvIds.add(Bytes.fromUTF8(Selector.getColumnStringName(col)));
     	}
     	
+    	// TODO: check that the returned list has conversations
     	KeyRange keyRange = new KeyRange();
     	keyRange.setCount(iCount);
     	keyRange.setStart_key(Selector.getColumnStringValue(listConvs.get(0)).getBytes());
     	keyRange.setEnd_key(Selector.getColumnStringValue(listConvs.get(listConvs.size() - 1)).getBytes());
     	
-    	// TODO: dont hardcode this
-    	LinkedHashMap<String, List<Column>> mapConvs = selector.getColumnsFromRowsUtf8Keys("conversations", keyRange, false, ConsistencyLevel.ONE);
-    	TreeSet<Message> setMessages = new TreeSet<Message>();
-    	TreeSet<Conversation> conversations = new TreeSet<Conversation>();
+    	LinkedHashMap<String, List<Column>> mapConvs = selector.getColumnsFromRowsUtf8Keys(ConversationUtil.CONVERSATIONS, keyRange, false, ConsistencyLevel.ONE);
+    	TreeSet<Message> setMessages;
+    	TreeSet<Conversation> conversations = new TreeSet<Conversation>();    	
+		Conversation c;
+    	int i = 0;
     	
     	for (Entry<String, List<Column>> e : mapConvs.entrySet())
     	{
     		c = new Conversation();
-        	c.setId(e.getKey());
+        	c.setId(e.getKey());        	        	        
+        	c.setLastReceivedDate(Long.valueOf(Selector.getColumnTimestamp(listConvs, e.getKey())));
+        	setMessages = new TreeSet<Message>();        	
         	
     		for (Column colConv : e.getValue())
     		{
@@ -326,10 +340,22 @@ class FolderUtil
         	}
         	        	
         	c.setMessages(setMessages);
-        	conversations.add(c);        	
+        	conversations.add(c);        
+        	++i;
     	}
     	
     	return conversations;
+	}
+
+	public static Mutator _addConvToFolder(Mutator mutator, Folder f, Conversation conv)
+	{
+    	return mutator.writeColumn(FolderUtil.FOLDERS, FolderUtil.getId(f), mutator.newColumn(conv.getId(), ""));		
+	}
+
+	public static Mutator _delConvFromFolder(Mutator mutator, Folder f, Conversation conv)
+	{
+		System.out.println("deleting from " + FolderUtil.getId(f) + "  " + conv.getId());
+		return mutator.deleteColumn(FolderUtil.FOLDERS, FolderUtil.getId(f), conv.getId());
 	}
 }
 
@@ -353,18 +379,25 @@ class MessageUtil
 
 class ConversationUtil
 {
+	public static final String CONVERSATIONS = "conversations";
 	protected static String pool = "pool";
-	protected static String colFamily = "conversations";	        	        	    	    	
 	
-	public static boolean addMessage(Conversation conv, Message msg)
+	public static boolean addMessage(Folder f, Conversation conv, Message msg)
 	{
 		try
 		{
-        	Mutator mutator = Pelops.createMutator(pool);        		        		       
-        	mutator.writeColumn(colFamily, conv.getId(), mutator.newColumn(msg.getId(), MessageUtil.toJson(msg)));        		        	
-        	mutator.execute(ConsistencyLevel.ONE);		  
+        	Mutator mutator = Pelops.createMutator(pool);        		        		
+        	// add message to conversation
+        	mutator.writeColumn(CONVERSATIONS, conv.getId(), mutator.newColumn(msg.getId(), MessageUtil.toJson(msg)));
         	
-        	// TODO: must update folder sort order and bring this conv to the top
+        	// delete old conversation entry from the folder
+        	FolderUtil._delConvFromFolder(mutator, f, conv);        	
+        	
+        	// re-add the conversation entry to the "top" of the folder
+        	FolderUtil._addConvToFolder(mutator, f, conv);
+        	        	
+        	// run it
+        	mutator.execute(ConsistencyLevel.ONE);
         	
         	return true;
 		}
@@ -379,7 +412,7 @@ class ConversationUtil
 		Conversation c;
 		
     	Selector selector = Pelops.createSelector(pool);
-    	List<Column> columns = selector.getColumnsFromRow(colFamily, strId, false, ConsistencyLevel.ONE);
+    	List<Column> columns = selector.getColumnsFromRow(CONVERSATIONS, strId, false, ConsistencyLevel.ONE);
     	TreeSet<Message> setMessages = new TreeSet<Message>();
     	
     	for (Column col : columns)
