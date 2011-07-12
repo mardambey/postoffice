@@ -12,6 +12,11 @@
 	</properties>
 	<dependencies>
 		<dependency>
+			<groupId>org.jboss.netty</groupId>
+			<artifactId>netty</artifactId>
+			<version>3.2.4.Final</version>
+		</dependency>
+		<dependency>
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-simple</artifactId>
 			<version>1.5.11</version>
@@ -33,6 +38,10 @@
 			<name>Maven Central Repo</name>
 			<url>http://repo1.maven.org/maven2</url>
 		</repository>
+		<repository>
+      <id>repository.jboss.org</id>
+      <url>https ://repository.jboss.org/nexus/content/repositories/releases/</url>
+    </repository>
 		<repository>
 			<id>riptano</id>
 			<name>riptano</name>
