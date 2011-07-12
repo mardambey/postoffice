@@ -20,28 +20,64 @@
 package postoffice;
 
 import static java.net.HttpURLConnection.HTTP_OK;
+import static org.jboss.netty.channel.Channels.pipeline;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.getHost;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.is100ContinueExpected;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.isKeepAlive;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_LENGTH;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_TYPE;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.COOKIE;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.SET_COOKIE;
+import static org.jboss.netty.handler.codec.http.HttpResponseStatus.CONTINUE;
+import static org.jboss.netty.handler.codec.http.HttpResponseStatus.OK;
+import static org.jboss.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.UUID;
+import java.util.concurrent.Executors;
 
 import org.apache.cassandra.thrift.Column;
 import org.apache.cassandra.thrift.ConsistencyLevel;
 import org.apache.cassandra.thrift.SlicePredicate;
 import org.apache.cassandra.thrift.SliceRange;
+import org.jboss.netty.bootstrap.ServerBootstrap;
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.ChannelPipeline;
+import org.jboss.netty.channel.ChannelPipelineFactory;
+import org.jboss.netty.channel.ExceptionEvent;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.channel.SimpleChannelUpstreamHandler;
+import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory;
+import org.jboss.netty.handler.codec.http.Cookie;
+import org.jboss.netty.handler.codec.http.CookieDecoder;
+import org.jboss.netty.handler.codec.http.CookieEncoder;
+import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
+import org.jboss.netty.handler.codec.http.HttpChunk;
+import org.jboss.netty.handler.codec.http.HttpChunkTrailer;
+import org.jboss.netty.handler.codec.http.HttpClientCodec;
+import org.jboss.netty.handler.codec.http.HttpContentCompressor;
+import org.jboss.netty.handler.codec.http.HttpContentDecompressor;
+import org.jboss.netty.handler.codec.http.HttpRequest;
+import org.jboss.netty.handler.codec.http.HttpRequestDecoder;
+import org.jboss.netty.handler.codec.http.HttpResponse;
+import org.jboss.netty.handler.codec.http.HttpResponseEncoder;
 import org.jboss.netty.handler.codec.http.QueryStringDecoder;
+import org.jboss.netty.handler.logging.LoggingHandler;
+import org.jboss.netty.logging.InternalLogLevel;
+import org.jboss.netty.util.CharsetUtil;
 import org.scale7.cassandra.pelops.Bytes;
 import org.scale7.cassandra.pelops.Cluster;
 import org.scale7.cassandra.pelops.Mutator;
@@ -53,7 +89,6 @@ import org.scale7.cassandra.pelops.pool.IThriftPool;
 import com.google.gson.Gson;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpServer;
 
 /**
  * Postoffice is a simple threaded messaging system on top of Cassandra.
@@ -83,33 +118,38 @@ import com.sun.net.httpserver.HttpServer;
 
 public class App
 {		
-	public final static String HTTPD_HOST = "192.168.100.10";
 	public final static Integer HTTPD_PORT = 8081;
 	
 	public static void startWebInterface()
-	{		
-		Httpd httpd;
-				
+	{						
 		try
 		{
-			httpd = new Httpd(HTTPD_HOST, HTTPD_PORT);
-			httpd.handle("/folder", FolderHandler.get());
-			httpd.handle("/new", NewConversationHandler.get());
-			httpd.handle("/reply", ReplyHandler.get());
-			httpd.handle("/", IndexHandler.get());
-			httpd.addFinalizeHook(new Runnable() 
-			{
-				public void run()
-				{
-		    		PelopsUtil.disconnect();
-				}
-			});
+			HttpServer httpd = new HttpServer(HTTPD_PORT);
 			httpd.start();
 		}
-		catch(IOException e)
+		catch(Exception e)
 		{
 			e.printStackTrace();
 		}
+		
+//			httpd = new Httpd(HTTPD_HOST, HTTPD_PORT);
+//			httpd.handle("/folder", FolderHandler.get());
+//			httpd.handle("/new", NewConversationHandler.get());
+//			httpd.handle("/reply", ReplyHandler.get());
+//			httpd.handle("/", IndexHandler.get());
+//			httpd.addFinalizeHook(new Runnable() 
+//			{
+//				public void run()
+//				{
+//		    		PelopsUtil.disconnect();
+//				}
+//			});
+//			httpd.start();
+//		}
+		//catch(IOException e)
+		//{
+		//	e.printStackTrace();
+		//}
 	}
 	
 	public static void populateData()
@@ -638,64 +678,15 @@ class PelopsUtil
 		return pool;
 	}
 }
-
-class Httpd
+	
+interface HttpdHandler extends HttpHandler
 {
-	private List<Runnable> m_finalizeHooks = new LinkedList<Runnable>();
-	private final InetSocketAddress m_addr;
-    private final HttpServer m_server;
-    private final ThreadPoolExecutor m_executor = new ThreadPoolExecutor(8, 10, 100, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>())
-    {
-    	@Override
-    	protected void finalize()
-    	{
-    		super.finalize();
-    		for (Runnable hook : m_finalizeHooks)
-    		{
-    			hook.run();
-    		}
-    	}
-    };
-    
-	public Httpd(String strHost, Integer intPort) throws IOException
-	{		
-        m_addr = new InetSocketAddress(strHost, intPort);
-
-        // connection backlog = 10
-        m_server = HttpServer.create(m_addr, 10);
-        m_server.setExecutor(m_executor);
-	}
-	
-	public Httpd handle(String strUrl, HttpdHandler handler)
-	{
-		m_server.createContext(strUrl, handler);
-		return this;
-	}
-	
-	public void addFinalizeHook(Runnable hook)
-	{
-		m_finalizeHooks.add(hook);
-	}
-	
-	public void start()
-	{
-		m_server.start();
-	}
-	
-	public void stop()
-	{
-		// wait up to 5 secs
-		m_server.stop(5);
-	}
-	
-	public interface HttpdHandler extends HttpHandler
-	{
-		// hide away sun's HttpHandler so we can do more 
-		// with it if we need to (abstract more)
-	}
+	// hide away sun's HttpHandler so we can do more 
+	// with it if we need to (abstract more)
 }
 
-class IndexHandler implements Httpd.HttpdHandler
+
+class IndexHandler implements HttpdHandler
 {
 	@Override
 	public void handle(HttpExchange e) throws IOException
@@ -720,7 +711,7 @@ class IndexHandler implements Httpd.HttpdHandler
 	}
 }
 
-class FolderHandler implements Httpd.HttpdHandler
+class FolderHandler implements HttpdHandler
 {
 	protected final String COUNT = "count";
 	protected final String OWNER = "owner";
@@ -768,7 +759,7 @@ class FolderHandler implements Httpd.HttpdHandler
 	}
 }
 
-abstract class ConversationHandler implements Httpd.HttpdHandler
+abstract class ConversationHandler implements HttpdHandler
 {
 	protected final String FROM = "from";
 	protected final String TO = "to";
@@ -863,5 +854,269 @@ class ReplyHandler extends ConversationHandler
 	public static ReplyHandler get()
 	{
 		return new ReplyHandler();
+	}
+}
+
+class HttpServer
+{
+	protected Integer m_intPort;
+	
+	public HttpServer(Integer intPort)
+	{
+		m_intPort = intPort;
+	}
+	
+	public void start()
+	{
+		// Configure the server.
+		ServerBootstrap bootstrap = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()));
+
+		// Set up the event pipeline factory.
+		bootstrap.setPipelineFactory(new HttpServerPipelineFactory());
+
+		// Bind and start to accept incoming connections.
+		bootstrap.bind(new InetSocketAddress(m_intPort));
+	}
+}
+
+class HttpResponseHandler extends SimpleChannelUpstreamHandler
+{
+
+	private boolean readingChunks;
+
+	@Override
+	public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception
+	{
+		if(!readingChunks)
+		{
+			HttpResponse response = (HttpResponse) e.getMessage();
+
+			System.out.println("STATUS: " + response.getStatus());
+			System.out.println("VERSION: " + response.getProtocolVersion());
+			System.out.println();
+
+			if(!response.getHeaderNames().isEmpty())
+			{
+				for(String name : response.getHeaderNames())
+				{
+					for(String value : response.getHeaders(name))
+					{
+						System.out.println("HEADER: " + name + " = " + value);
+					}
+				}
+				System.out.println();
+			}
+
+			if(response.isChunked())
+			{
+				readingChunks = true;
+				System.out.println("CHUNKED CONTENT {");
+			}
+			else
+			{
+				ChannelBuffer content = response.getContent();
+				if(content.readable())
+				{
+					System.out.println("CONTENT {");
+					System.out.println(content.toString(CharsetUtil.UTF_8));
+					System.out.println("} END OF CONTENT");
+				}
+			}
+		}
+		else
+		{
+			HttpChunk chunk = (HttpChunk) e.getMessage();
+			if(chunk.isLast())
+			{
+				readingChunks = false;
+				System.out.println("} END OF CHUNKED CONTENT");
+			}
+			else
+			{
+				System.out.print(chunk.getContent().toString(CharsetUtil.UTF_8));
+				System.out.flush();
+			}
+		}
+	}
+}
+
+class HttpServerPipelineFactory implements ChannelPipelineFactory
+{
+	@Override
+	public ChannelPipeline getPipeline() throws Exception
+	{
+		// Create a default pipeline implementation.
+		ChannelPipeline pipeline = pipeline();
+		pipeline.addLast("log", new LoggingHandler(InternalLogLevel.INFO));
+
+		// Uncomment the following line if you want HTTPS
+		// SSLEngine engine =
+		// SecureChatSslContextFactory.getServerContext().createSSLEngine();
+		// engine.setUseClientMode(false);
+		// pipeline.addLast("ssl", new SslHandler(engine));
+
+		pipeline.addLast("decoder", new HttpRequestDecoder());
+		// Uncomment the following line if you don't want to handle HttpChunks.
+		// pipeline.addLast("aggregator", new HttpChunkAggregator(1048576));
+		pipeline.addLast("encoder", new HttpResponseEncoder());
+		// Remove the following line if you don't want automatic content
+		// compression.
+		pipeline.addLast("deflater", new HttpContentCompressor());
+		pipeline.addLast("handler", new HttpRequestHandler());
+		return pipeline;
+	}
+}
+
+class HttpRequestHandler extends SimpleChannelUpstreamHandler
+{
+
+	private HttpRequest request;
+	private boolean readingChunks;
+	/** Buffer that stores the response content */
+	private final StringBuilder buf = new StringBuilder();
+
+	@Override
+	public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception
+	{
+		if(!readingChunks)
+		{
+			HttpRequest request = this.request = (HttpRequest) e.getMessage();
+
+			if(is100ContinueExpected(request))
+			{
+				send100Continue(e);
+			}
+
+			buf.setLength(0);
+			buf.append("WELCOME TO THE WILD WILD WEB SERVER\r\n");
+			buf.append("===================================\r\n");
+
+			buf.append("VERSION: " + request.getProtocolVersion() + "\r\n");
+			buf.append("HOSTNAME: " + getHost(request, "unknown") + "\r\n");
+			buf.append("REQUEST_URI: " + request.getUri() + "\r\n\r\n");
+
+			for(Map.Entry<String, String> h : request.getHeaders())
+			{
+				buf.append("HEADER: " + h.getKey() + " = " + h.getValue() + "\r\n");
+			}
+			buf.append("\r\n");
+
+			QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.getUri());
+			Map<String, List<String>> params = queryStringDecoder.getParameters();
+			if(!params.isEmpty())
+			{
+				for(Entry<String, List<String>> p : params.entrySet())
+				{
+					String key = p.getKey();
+					List<String> vals = p.getValue();
+					for(String val : vals)
+					{
+						buf.append("PARAM: " + key + " = " + val + "\r\n");
+					}
+				}
+				buf.append("\r\n");
+			}
+
+			if(request.isChunked())
+			{
+				readingChunks = true;
+			}
+			else
+			{
+				ChannelBuffer content = request.getContent();
+				if(content.readable())
+				{
+					buf.append("CONTENT: " + content.toString(CharsetUtil.UTF_8) + "\r\n");
+				}
+				writeResponse(e);
+			}
+		}
+		else
+		{
+			HttpChunk chunk = (HttpChunk) e.getMessage();
+			if(chunk.isLast())
+			{
+				readingChunks = false;
+				buf.append("END OF CONTENT\r\n");
+
+				HttpChunkTrailer trailer = (HttpChunkTrailer) chunk;
+				if(!trailer.getHeaderNames().isEmpty())
+				{
+					buf.append("\r\n");
+					for(String name : trailer.getHeaderNames())
+					{
+						for(String value : trailer.getHeaders(name))
+						{
+							buf.append("TRAILING HEADER: " + name + " = " + value + "\r\n");
+						}
+					}
+					buf.append("\r\n");
+				}
+
+				writeResponse(e);
+			}
+			else
+			{
+				buf.append("CHUNK: " + chunk.getContent().toString(CharsetUtil.UTF_8) + "\r\n");
+			}
+		}
+	}
+
+	private void writeResponse(MessageEvent e)
+	{
+		// Decide whether to close the connection or not.
+		boolean keepAlive = isKeepAlive(request);
+
+		// Build the response object.
+		HttpResponse response = new DefaultHttpResponse(HTTP_1_1, OK);
+		response.setContent(ChannelBuffers.copiedBuffer(buf.toString(), CharsetUtil.UTF_8));
+		response.setHeader(CONTENT_TYPE, "text/plain; charset=UTF-8");
+
+		if(keepAlive)
+		{
+			// Add 'Content-Length' header only for a keep-alive connection.
+			response.setHeader(CONTENT_LENGTH, response.getContent().readableBytes());
+		}
+
+		// Encode the cookie.
+		String cookieString = request.getHeader(COOKIE);
+		if(cookieString != null)
+		{
+			CookieDecoder cookieDecoder = new CookieDecoder();
+			Set<Cookie> cookies = cookieDecoder.decode(cookieString);
+			if(!cookies.isEmpty())
+			{
+				// Reset the cookies if necessary.
+				CookieEncoder cookieEncoder = new CookieEncoder(true);
+				for(Cookie cookie : cookies)
+				{
+					cookieEncoder.addCookie(cookie);
+				}
+				response.addHeader(SET_COOKIE, cookieEncoder.encode());
+			}
+		}
+
+		// Write the response.
+		ChannelFuture future = e.getChannel().write(response);
+
+		// Close the non-keep-alive connection after the write operation is
+		// done.
+		if(!keepAlive)
+		{
+			future.addListener(ChannelFutureListener.CLOSE);
+		}
+	}
+
+	private void send100Continue(MessageEvent e)
+	{
+		HttpResponse response = new DefaultHttpResponse(HTTP_1_1, CONTINUE);
+		e.getChannel().write(response);
+	}
+
+	@Override
+	public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) throws Exception
+	{
+		e.getCause().printStackTrace();
+		e.getChannel().close();
 	}
 }
