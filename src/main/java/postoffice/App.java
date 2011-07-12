@@ -36,6 +36,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,8 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executors;
 
 import org.apache.cassandra.thrift.Column;
@@ -125,6 +128,10 @@ public class App
 		try
 		{
 			HttpServer httpd = new HttpServer(HTTPD_PORT);
+			httpd.getHandlers().put("/folder", FolderHandler.get());
+			httpd.getHandlers().put("/new", NewConversationHandler.get());
+			httpd.getHandlers().put("/reply", ReplyHandler.get());
+			httpd.getHandlers().put("/", IndexHandler.get());
 			httpd.start();
 		}
 		catch(Exception e)
@@ -686,23 +693,17 @@ interface HttpdHandler extends HttpHandler
 }
 
 
-class IndexHandler implements HttpdHandler
+class IndexHandler implements HttpServer.RequestHandler
 {
 	@Override
-	public void handle(HttpExchange e) throws IOException
-	{	
-		OutputStream outStream = e.getResponseBody();
-		
+	public String handle(HttpRequest r)
+	{			
 		StringBuffer strBuf = new StringBuffer();
 		strBuf.append("<html><head><title>Postoffice: Threaded messaging over HTTP & Cassandra</title></head><body>");
 		strBuf.append("<h1>Welcome to Postoffice!</h1>");
 		strBuf.append("</body></html>");
 		
-		e.getResponseHeaders().add("Content-type", "text/html");	
-		e.sendResponseHeaders(HTTP_OK, strBuf.length());        
-        outStream.write(strBuf.toString().getBytes());
-        outStream.close();
-        e.close();
+		return strBuf.toString();
 	}
 	
 	public static IndexHandler get()
@@ -711,7 +712,7 @@ class IndexHandler implements HttpdHandler
 	}
 }
 
-class FolderHandler implements HttpdHandler
+class FolderHandler implements HttpServer.RequestHandler
 {
 	protected final String COUNT = "count";
 	protected final String OWNER = "owner";
@@ -719,9 +720,9 @@ class FolderHandler implements HttpdHandler
 	protected final String FOLDER = "folder";
 	
 	@Override
-	public void handle(HttpExchange e) throws IOException
+	public String handle(HttpRequest r)
 	{
-		QueryStringDecoder decoder = new QueryStringDecoder(e.getRequestURI());
+		QueryStringDecoder decoder = new QueryStringDecoder(r.getUri());
 		Map<String, List<String>> mapParams = decoder.getParameters();
 	
 		String strOwner = mapParams.get(OWNER).get(0);
@@ -740,17 +741,11 @@ class FolderHandler implements HttpdHandler
     		System.out.println(ex.getMessage());
     		ex.printStackTrace();
     	}
-		
-		OutputStream outStream = e.getResponseBody();
-		
+				
 		StringBuffer strBuf = new StringBuffer();
 		strBuf.append(FolderUtil.toJson(inbox));
 		
-		e.getResponseHeaders().add("Content-type", "text/javascript");	
-		e.sendResponseHeaders(HTTP_OK, strBuf.length());        
-        outStream.write(strBuf.toString().getBytes());
-        outStream.close();
-        e.close();
+		return strBuf.toString();
 	}	
 	
 	public static FolderHandler get()
@@ -759,7 +754,7 @@ class FolderHandler implements HttpdHandler
 	}
 }
 
-abstract class ConversationHandler implements HttpdHandler
+abstract class ConversationHandler implements HttpServer.RequestHandler
 {
 	protected final String FROM = "from";
 	protected final String TO = "to";
@@ -776,9 +771,9 @@ class NewConversationHandler extends ConversationHandler
 	protected final String BODY = "body";
 	
 	@Override
-	public void handle(HttpExchange e) throws IOException
+	public String handle(HttpRequest r)
 	{	
-		QueryStringDecoder decoder = new QueryStringDecoder(e.getRequestURI());
+		QueryStringDecoder decoder = new QueryStringDecoder(r.getUri());
 		Map<String, List<String>> mapParams = decoder.getParameters();
 	
 		String strFrom = mapParams.get(FROM).get(0);
@@ -800,13 +795,8 @@ class NewConversationHandler extends ConversationHandler
     		strBuf.append("{\"status\":\"err\"}");
 
     	}
-		
-		OutputStream outStream = e.getResponseBody();						
-		e.getResponseHeaders().add("Content-type", "text/javascript");	
-		e.sendResponseHeaders(HTTP_OK, strBuf.length());        
-        outStream.write(strBuf.toString().getBytes());
-        outStream.close();
-        e.close();        
+    	
+    	return strBuf.toString();
 	}
 	
 	public static NewConversationHandler get()
@@ -818,9 +808,9 @@ class NewConversationHandler extends ConversationHandler
 class ReplyHandler extends ConversationHandler
 {
 	@Override
-	public void handle(HttpExchange e) throws IOException
+	public String handle(HttpRequest r)
 	{		
-		QueryStringDecoder decoder = new QueryStringDecoder(e.getRequestURI());
+		QueryStringDecoder decoder = new QueryStringDecoder(r.getUri());
 		Map<String, List<String>> mapParams = decoder.getParameters();
 	
 		String strFrom = mapParams.get(FROM).get(0);
@@ -843,12 +833,7 @@ class ReplyHandler extends ConversationHandler
     		strBuf.append("{\"status\":\"err\"}");
     	}
 		
-		OutputStream outStream = e.getResponseBody();						
-		e.getResponseHeaders().add("Content-type", "text/javascript");	
-		e.sendResponseHeaders(HTTP_OK, strBuf.length());        
-        outStream.write(strBuf.toString().getBytes());
-        outStream.close();
-        e.close();        
+    	return strBuf.toString();
 	}
 	
 	public static ReplyHandler get()
@@ -860,6 +845,17 @@ class ReplyHandler extends ConversationHandler
 class HttpServer
 {
 	protected Integer m_intPort;
+	
+	protected static Map<String, HttpServer.RequestHandler> m_mapHandlers = new ConcurrentSkipListMap<String, HttpServer.RequestHandler>(new Comparator() 
+	{
+		@Override
+		public int compare(Object o1, Object o2)
+		{
+			// force everything to the end of the list
+			return 1;
+		}
+		
+	});
 	
 	public HttpServer(Integer intPort)
 	{
@@ -877,66 +873,15 @@ class HttpServer
 		// Bind and start to accept incoming connections.
 		bootstrap.bind(new InetSocketAddress(m_intPort));
 	}
-}
-
-class HttpResponseHandler extends SimpleChannelUpstreamHandler
-{
-
-	private boolean readingChunks;
-
-	@Override
-	public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception
+	
+	public interface RequestHandler
 	{
-		if(!readingChunks)
-		{
-			HttpResponse response = (HttpResponse) e.getMessage();
-
-			System.out.println("STATUS: " + response.getStatus());
-			System.out.println("VERSION: " + response.getProtocolVersion());
-			System.out.println();
-
-			if(!response.getHeaderNames().isEmpty())
-			{
-				for(String name : response.getHeaderNames())
-				{
-					for(String value : response.getHeaders(name))
-					{
-						System.out.println("HEADER: " + name + " = " + value);
-					}
-				}
-				System.out.println();
-			}
-
-			if(response.isChunked())
-			{
-				readingChunks = true;
-				System.out.println("CHUNKED CONTENT {");
-			}
-			else
-			{
-				ChannelBuffer content = response.getContent();
-				if(content.readable())
-				{
-					System.out.println("CONTENT {");
-					System.out.println(content.toString(CharsetUtil.UTF_8));
-					System.out.println("} END OF CONTENT");
-				}
-			}
-		}
-		else
-		{
-			HttpChunk chunk = (HttpChunk) e.getMessage();
-			if(chunk.isLast())
-			{
-				readingChunks = false;
-				System.out.println("} END OF CHUNKED CONTENT");
-			}
-			else
-			{
-				System.out.print(chunk.getContent().toString(CharsetUtil.UTF_8));
-				System.out.flush();
-			}
-		}
+		public String handle(HttpRequest request);
+	}
+	
+	public static Map<String, HttpServer.RequestHandler> getHandlers()
+	{
+		return m_mapHandlers;
 	}
 }
 
@@ -947,7 +892,7 @@ class HttpServerPipelineFactory implements ChannelPipelineFactory
 	{
 		// Create a default pipeline implementation.
 		ChannelPipeline pipeline = pipeline();
-		pipeline.addLast("log", new LoggingHandler(InternalLogLevel.INFO));
+		//pipeline.addLast("log", new LoggingHandler(InternalLogLevel.ERROR));
 
 		// Uncomment the following line if you want HTTPS
 		// SSLEngine engine =
@@ -974,7 +919,7 @@ class HttpRequestHandler extends SimpleChannelUpstreamHandler
 	private boolean readingChunks;
 	/** Buffer that stores the response content */
 	private final StringBuilder buf = new StringBuilder();
-
+		
 	@Override
 	public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception
 	{
@@ -988,46 +933,27 @@ class HttpRequestHandler extends SimpleChannelUpstreamHandler
 			}
 
 			buf.setLength(0);
-			buf.append("WELCOME TO THE WILD WILD WEB SERVER\r\n");
-			buf.append("===================================\r\n");
-
-			buf.append("VERSION: " + request.getProtocolVersion() + "\r\n");
-			buf.append("HOSTNAME: " + getHost(request, "unknown") + "\r\n");
-			buf.append("REQUEST_URI: " + request.getUri() + "\r\n\r\n");
-
-			for(Map.Entry<String, String> h : request.getHeaders())
+			
+			for (Map.Entry<String, HttpServer.RequestHandler> entry : HttpServer.getHandlers().entrySet())
 			{
-				buf.append("HEADER: " + h.getKey() + " = " + h.getValue() + "\r\n");
-			}
-			buf.append("\r\n");
-
-			QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.getUri());
-			Map<String, List<String>> params = queryStringDecoder.getParameters();
-			if(!params.isEmpty())
-			{
-				for(Entry<String, List<String>> p : params.entrySet())
+				String strUrl = entry.getKey();
+								
+				if (!request.getUri().startsWith(strUrl))
 				{
-					String key = p.getKey();
-					List<String> vals = p.getValue();
-					for(String val : vals)
-					{
-						buf.append("PARAM: " + key + " = " + val + "\r\n");
-					}
+					continue;
 				}
-				buf.append("\r\n");
+				
+				HttpServer.RequestHandler handler = entry.getValue();
+				buf.append(handler.handle(request));
+				break;
 			}
-
+								
 			if(request.isChunked())
 			{
 				readingChunks = true;
 			}
 			else
-			{
-				ChannelBuffer content = request.getContent();
-				if(content.readable())
-				{
-					buf.append("CONTENT: " + content.toString(CharsetUtil.UTF_8) + "\r\n");
-				}
+			{				
 				writeResponse(e);
 			}
 		}
@@ -1037,28 +963,8 @@ class HttpRequestHandler extends SimpleChannelUpstreamHandler
 			if(chunk.isLast())
 			{
 				readingChunks = false;
-				buf.append("END OF CONTENT\r\n");
-
-				HttpChunkTrailer trailer = (HttpChunkTrailer) chunk;
-				if(!trailer.getHeaderNames().isEmpty())
-				{
-					buf.append("\r\n");
-					for(String name : trailer.getHeaderNames())
-					{
-						for(String value : trailer.getHeaders(name))
-						{
-							buf.append("TRAILING HEADER: " + name + " = " + value + "\r\n");
-						}
-					}
-					buf.append("\r\n");
-				}
-
 				writeResponse(e);
-			}
-			else
-			{
-				buf.append("CHUNK: " + chunk.getContent().toString(CharsetUtil.UTF_8) + "\r\n");
-			}
+			}			
 		}
 	}
 
@@ -1070,7 +976,7 @@ class HttpRequestHandler extends SimpleChannelUpstreamHandler
 		// Build the response object.
 		HttpResponse response = new DefaultHttpResponse(HTTP_1_1, OK);
 		response.setContent(ChannelBuffers.copiedBuffer(buf.toString(), CharsetUtil.UTF_8));
-		response.setHeader(CONTENT_TYPE, "text/plain; charset=UTF-8");
+		response.setHeader(CONTENT_TYPE, "text/javascript; charset=UTF-8");
 
 		if(keepAlive)
 		{
