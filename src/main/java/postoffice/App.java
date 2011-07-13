@@ -1,5 +1,6 @@
 /*
  * Postoffice: Simple threaded messaging using Cassandra.
+ * 
  * Copyright (C) 2011 Hisham Mardam-Bey <hisham.mardambey@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -19,9 +20,7 @@
 
 package postoffice;
 
-import static java.net.HttpURLConnection.HTTP_OK;
 import static org.jboss.netty.channel.Channels.pipeline;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.getHost;
 import static org.jboss.netty.handler.codec.http.HttpHeaders.is100ContinueExpected;
 import static org.jboss.netty.handler.codec.http.HttpHeaders.isKeepAlive;
 import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_LENGTH;
@@ -32,8 +31,6 @@ import static org.jboss.netty.handler.codec.http.HttpResponseStatus.CONTINUE;
 import static org.jboss.netty.handler.codec.http.HttpResponseStatus.OK;
 import static org.jboss.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
-import java.io.IOException;
-import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -44,7 +41,6 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executors;
 
@@ -53,7 +49,6 @@ import org.apache.cassandra.thrift.ConsistencyLevel;
 import org.apache.cassandra.thrift.SlicePredicate;
 import org.apache.cassandra.thrift.SliceRange;
 import org.jboss.netty.bootstrap.ServerBootstrap;
-import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
@@ -69,17 +64,12 @@ import org.jboss.netty.handler.codec.http.CookieDecoder;
 import org.jboss.netty.handler.codec.http.CookieEncoder;
 import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
 import org.jboss.netty.handler.codec.http.HttpChunk;
-import org.jboss.netty.handler.codec.http.HttpChunkTrailer;
-import org.jboss.netty.handler.codec.http.HttpClientCodec;
 import org.jboss.netty.handler.codec.http.HttpContentCompressor;
-import org.jboss.netty.handler.codec.http.HttpContentDecompressor;
 import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpRequestDecoder;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.handler.codec.http.HttpResponseEncoder;
 import org.jboss.netty.handler.codec.http.QueryStringDecoder;
-import org.jboss.netty.handler.logging.LoggingHandler;
-import org.jboss.netty.logging.InternalLogLevel;
 import org.jboss.netty.util.CharsetUtil;
 import org.scale7.cassandra.pelops.Bytes;
 import org.scale7.cassandra.pelops.Cluster;
@@ -90,8 +80,6 @@ import org.scale7.cassandra.pelops.pool.CommonsBackedPool;
 import org.scale7.cassandra.pelops.pool.IThriftPool;
 
 import com.google.gson.Gson;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
 
 /**
  * Postoffice is a simple threaded messaging system on top of Cassandra.
@@ -138,25 +126,6 @@ public class App
 		{
 			e.printStackTrace();
 		}
-		
-//			httpd = new Httpd(HTTPD_HOST, HTTPD_PORT);
-//			httpd.handle("/folder", FolderHandler.get());
-//			httpd.handle("/new", NewConversationHandler.get());
-//			httpd.handle("/reply", ReplyHandler.get());
-//			httpd.handle("/", IndexHandler.get());
-//			httpd.addFinalizeHook(new Runnable() 
-//			{
-//				public void run()
-//				{
-//		    		PelopsUtil.disconnect();
-//				}
-//			});
-//			httpd.start();
-//		}
-		//catch(IOException e)
-		//{
-		//	e.printStackTrace();
-		//}
 	}
 	
 	public static void populateData()
@@ -671,7 +640,7 @@ class PelopsUtil
 	{
     	String keyspace = "hmb";
     	Cluster cluster = new Cluster("localhost", 9160);
-    	pool = new CommonsBackedPool(cluster, keyspace);
+    	pool = new CommonsBackedPool(cluster, keyspace);    	
 	}
 	
 	public static void disconnect()
@@ -685,13 +654,6 @@ class PelopsUtil
 		return pool;
 	}
 }
-	
-interface HttpdHandler extends HttpHandler
-{
-	// hide away sun's HttpHandler so we can do more 
-	// with it if we need to (abstract more)
-}
-
 
 class IndexHandler implements HttpServer.RequestHandler
 {
@@ -846,7 +808,7 @@ class HttpServer
 {
 	protected Integer m_intPort;
 	
-	protected static Map<String, HttpServer.RequestHandler> m_mapHandlers = new ConcurrentSkipListMap<String, HttpServer.RequestHandler>(new Comparator() 
+	protected Map<String, HttpServer.RequestHandler> m_mapHandlers = new ConcurrentSkipListMap<String, HttpServer.RequestHandler>(new Comparator() 
 	{
 		@Override
 		public int compare(Object o1, Object o2)
@@ -868,7 +830,7 @@ class HttpServer
 		ServerBootstrap bootstrap = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()));
 
 		// Set up the event pipeline factory.
-		bootstrap.setPipelineFactory(new HttpServerPipelineFactory());
+		bootstrap.setPipelineFactory(new HttpServerPipelineFactory(m_mapHandlers));
 
 		// Bind and start to accept incoming connections.
 		bootstrap.bind(new InetSocketAddress(m_intPort));
@@ -879,7 +841,7 @@ class HttpServer
 		public String handle(HttpRequest request);
 	}
 	
-	public static Map<String, HttpServer.RequestHandler> getHandlers()
+	public Map<String, HttpServer.RequestHandler> getHandlers()
 	{
 		return m_mapHandlers;
 	}
@@ -887,46 +849,44 @@ class HttpServer
 
 class HttpServerPipelineFactory implements ChannelPipelineFactory
 {
+	protected Map<String, HttpServer.RequestHandler> m_mapHandlers;
+	
+	public HttpServerPipelineFactory(Map<String, HttpServer.RequestHandler> mapHandlers)
+	{
+		m_mapHandlers = mapHandlers;
+	}
+	
 	@Override
 	public ChannelPipeline getPipeline() throws Exception
 	{
-		// Create a default pipeline implementation.
 		ChannelPipeline pipeline = pipeline();
-		//pipeline.addLast("log", new LoggingHandler(InternalLogLevel.ERROR));
-
-		// Uncomment the following line if you want HTTPS
-		// SSLEngine engine =
-		// SecureChatSslContextFactory.getServerContext().createSSLEngine();
-		// engine.setUseClientMode(false);
-		// pipeline.addLast("ssl", new SslHandler(engine));
-
-		pipeline.addLast("decoder", new HttpRequestDecoder());
-		// Uncomment the following line if you don't want to handle HttpChunks.
-		// pipeline.addLast("aggregator", new HttpChunkAggregator(1048576));
+		pipeline.addLast("decoder", new HttpRequestDecoder());		
 		pipeline.addLast("encoder", new HttpResponseEncoder());
-		// Remove the following line if you don't want automatic content
-		// compression.
 		pipeline.addLast("deflater", new HttpContentCompressor());
-		pipeline.addLast("handler", new HttpRequestHandler());
+		pipeline.addLast("handler", new HttpRequestHandler(m_mapHandlers));
 		return pipeline;
 	}
 }
 
 class HttpRequestHandler extends SimpleChannelUpstreamHandler
 {
-
+	protected Map<String, HttpServer.RequestHandler> m_mapHandlers;			
 	private HttpRequest request;
 	private boolean readingChunks;
 	/** Buffer that stores the response content */
 	private final StringBuilder buf = new StringBuilder();
-		
+	
+	public HttpRequestHandler(Map<String, HttpServer.RequestHandler> mapHandlers)
+	{
+		m_mapHandlers = mapHandlers;
+	}
+	
 	@Override
 	public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception
 	{
 		if(!readingChunks)
 		{
 			HttpRequest request = this.request = (HttpRequest) e.getMessage();
-
 			if(is100ContinueExpected(request))
 			{
 				send100Continue(e);
@@ -934,7 +894,7 @@ class HttpRequestHandler extends SimpleChannelUpstreamHandler
 
 			buf.setLength(0);
 			
-			for (Map.Entry<String, HttpServer.RequestHandler> entry : HttpServer.getHandlers().entrySet())
+			for (Map.Entry<String, HttpServer.RequestHandler> entry : m_mapHandlers.entrySet())
 			{
 				String strUrl = entry.getKey();
 								
