@@ -68,4 +68,3 @@ Cassandra schema:
     create column family conversations with column_type = 'Standard' and comparator = 'TimeUUIDType';
 
 (C) 2011 Hisham Mardam-Bey <hisham.mardambey@gmail.com>
-=======================================================
